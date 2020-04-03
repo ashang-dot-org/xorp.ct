@@ -162,33 +162,9 @@ bool supports_mcast_tables = false;
 #endif
 
 
-//
-// Exported variables
-//
-
-//
-// Static class members
-//
-
-//
-// Local constants definitions
-//
-
-//
-// Local structures/classes, typedefs and macros
-//
-
 #ifdef HOST_OS_WINDOWS
 typedef char *caddr_t;
 #endif
-
-//
-// Local variables
-//
-
-//
-// Local functions prototypes
-//
 
 /**
  * MfeaMrouter::MfeaMrouter:
@@ -207,6 +183,10 @@ MfeaMrouter::MfeaMrouter(MfeaNode& mfea_node, const FibConfig& fibconfig)
 #endif
 {
     string error_msg;
+
+#ifndef USE_MULT_MCAST_TABLES
+    UNUSED(fibconfig);
+#endif
 
     //
     // Get the old state from the underlying system
@@ -273,6 +253,11 @@ MfeaMrouter::start()
 #endif // ! HOST_OS_WINDOWS
 
     // Register as multicast upcall receiver
+    string vrf;
+#ifdef USE_MULT_MCAST_TABLES
+    vrf = _fibconfig.get_vrf_name();
+#endif
+
     IoIpManager& io_ip_manager = mfea_node().fea_node().io_ip_manager();
     uint8_t ip_protocol = kernel_mrouter_ip_protocol();
     if (io_ip_manager.register_system_multicast_upcall_receiver(
@@ -280,6 +265,7 @@ MfeaMrouter::start()
 	    ip_protocol,
 	    callback(this, &MfeaMrouter::kernel_call_process),
 	    _mrouter_socket,
+	    vrf,
 	    error_msg)
 	!= XORP_OK) {
 	XLOG_ERROR("Cannot register multicast upcall receiver: %s",
@@ -287,8 +273,11 @@ MfeaMrouter::start()
 	return (XORP_ERROR);
     }
     if (! _mrouter_socket.is_valid()) {
-	XLOG_ERROR("Failed to assign the multicast routing socket");
+	XLOG_ERROR("Failed to assign the multicast routing socket, vrf: %s", vrf.c_str());
 	return (XORP_ERROR);
+    }
+    else {
+	XLOG_INFO("Using mrouter-socket: %d\n", _mrouter_socket.getSocket());
     }
 
     // Start the multicast routing in the kernel
@@ -412,6 +401,12 @@ MfeaMrouter::have_multicast_routing4() const
     if (s < 0)
 	return (false);		// Failure to open the socket
 
+    string vrf;
+#ifdef USE_MULT_MCAST_TABLES
+    vrf = _fibconfig.get_vrf_name();
+#endif
+    comm_set_bindtodevice(s, vrf.c_str());
+
     // First, try for multiple routing tables.
     bool do_mrt_init = true;
     new_mcast_tables_api = false;
@@ -487,7 +482,13 @@ MfeaMrouter::have_multicast_routing6() const
     s = socket(family(), SOCK_RAW, kernel_mrouter_ip_protocol());
     if (s < 0)
 	return (false);		// Failure to open the socket
-    
+
+    string vrf;
+#ifdef USE_MULT_MCAST_TABLES
+    vrf = _fibconfig.get_vrf_name();
+#endif
+    comm_set_bindtodevice(s, vrf.c_str());
+
     if (setsockopt(s, IPPROTO_IPV6, MRT6_INIT,
 		   (void *)&mrouter_version, sizeof(mrouter_version))
 	< 0) {
@@ -1325,8 +1326,10 @@ MfeaMrouter::add_multicast_vif(uint32_t vif_index, string& error_msg)
 	return XORP_ERROR;
 #else
 #ifdef USE_MULT_MCAST_TABLES
-	struct vifctl_ng vc_ng;
-	struct vifctl* vcp = &(vc_ng.vif);
+	struct vifctl_ng vc_ng __attribute__((aligned(64)));
+	// work around invalid g++ 9.1.1 warning about taking addr of packed element
+	unsigned char* tmpp = (unsigned char*)(&(vc_ng.vif));
+	struct vifctl* vcp = (struct vifctl*)(tmpp);
 	memset(&vc_ng, 0, sizeof(vc_ng));
 	sopt_arg = &vc_ng;
 	sz = sizeof(vc_ng);
@@ -1378,8 +1381,8 @@ MfeaMrouter::add_multicast_vif(uint32_t vif_index, string& error_msg)
 	//
 	if (setsockopt(_mrouter_socket, IPPROTO_IP, MRT_ADD_VIF,
 		       sopt_arg, sz) < 0) {
-	    error_msg = c_format("setsockopt(MRT_ADD_VIF, vif %s) failed: %s  sz: %i, ifindex: %i addr: %s",
-				 mfea_vif->name().c_str(), XSTRERROR,
+	    error_msg = c_format("setsockopt(%d, MRT_ADD_VIF, vif %s) failed: %s  sz: %i, ifindex: %i addr: %s",
+				 _mrouter_socket.getSocket(), mfea_vif->name().c_str(), XSTRERROR,
 				 (int)(sz), mfea_vif->pif_index(),
 				 mfea_vif->addr_ptr() ? mfea_vif->addr_ptr()->str().c_str() : "NULL");
 	    return XORP_ERROR;
@@ -1465,8 +1468,10 @@ MfeaMrouter::delete_multicast_vif(uint32_t vif_index)
 	//
 #ifdef HOST_OS_LINUX
 #ifdef USE_MULT_MCAST_TABLES
-	struct vifctl_ng vc_ng;
-	struct vifctl* vcp = &(vc_ng.vif);
+	struct vifctl_ng vc_ng __attribute__((aligned(64)));
+	// work around invalid g++ 9.1.1 warning about taking addr of packed element
+	unsigned char* tmpp = (unsigned char*)(&(vc_ng.vif));
+	struct vifctl* vcp = (struct vifctl*)(tmpp);
 	memset(&vc_ng, 0, sizeof(vc_ng));
 	void* sopt_arg = &vc_ng;
 	size_t sz = sizeof(vc_ng);
@@ -1601,8 +1606,10 @@ MfeaMrouter::add_mfc(const IPvX& source, const IPvX& group,
 #else
 
 #ifdef USE_MULT_MCAST_TABLES
-	struct mfcctl_ng mc_ng;
-	struct mfcctl* mcp = &(mc_ng.mfc);
+	struct mfcctl_ng mc_ng __attribute__((aligned(64)));
+	// work around invalid g++ 9.1.1 warning about taking addr of packed element
+	unsigned char* tmpp = (unsigned char*)(&(mc_ng.mfc));
+	struct mfcctl* mcp = (struct mfcctl*)(tmpp);
 	memset(&mc_ng, 0, sizeof(mc_ng));
 	void* sopt_arg = &mc_ng;
 	size_t sz = sizeof(mc_ng);
@@ -1731,8 +1738,10 @@ MfeaMrouter::delete_mfc(const IPvX& source, const IPvX& group)
 	return (XORP_ERROR);
 #else
 #ifdef USE_MULT_MCAST_TABLES
-	struct mfcctl_ng mc_ng;
-	struct mfcctl* mcp = &(mc_ng.mfc);
+	struct mfcctl_ng mc_ng __attribute__((aligned(64)));
+	// work around invalid g++ 9.1.1 warning about taking addr of packed element
+	unsigned char* tmpp = (unsigned char*)(&(mc_ng.mfc));
+	struct mfcctl* mcp = (struct mfcctl*)(tmpp);
 	memset(&mc_ng, 0, sizeof(mc_ng));
 	void* sopt_arg = &mc_ng;
 	size_t sz = sizeof(mc_ng);
@@ -2336,10 +2345,12 @@ MfeaMrouter::get_sg_count(const IPvX& source, const IPvX& group,
 #else
 	int ioctl_cmd = SIOCGETSGCNT;
 #ifdef USE_MULT_MCAST_TABLES
-	struct sioc_sg_req_ng sgreq_ng;
+	struct sioc_sg_req_ng sgreq_ng __attribute__((aligned(64)));
+	// work around invalid g++ 9.1.1 warning about taking addr of packed element
+	unsigned char* tmpp = (unsigned char*)(&(sgreq_ng.req));
+	struct sioc_sg_req* sgreqp = (struct sioc_sg_req*)(tmpp);
 	memset(&sgreq_ng, 0, sizeof(sgreq_ng));
 	sgreq_ng.table_id = getTableId();
-	struct sioc_sg_req* sgreqp = &(sgreq_ng.req);
 	void* o = &sgreq_ng;
 	ioctl_cmd = SIOCGETSGCNT_NG;
 	if (new_mcast_tables_api || !supports_mcast_tables) {
@@ -2452,10 +2463,12 @@ MfeaMrouter::get_vif_count(uint32_t vif_index, VifCount& vif_count)
 #else
 	int ioctl_cmd = SIOCGETVIFCNT;
 #ifdef USE_MULT_MCAST_TABLES
-	struct sioc_vif_req_ng vreq_ng;
+	struct sioc_vif_req_ng vreq_ng __attribute__((aligned(64)));
+	// work around invalid g++ 9.1.1 warning about taking addr of packed element
+	unsigned char* tmpp = (unsigned char*)(&(vreq_ng.vif));
+	struct sioc_vif_req* vreqp = (struct sioc_vif_req*)(tmpp);
 	memset(&vreq_ng, 0, sizeof(vreq_ng));
 	vreq_ng.table_id = getTableId();
-	struct sioc_vif_req* vreqp = &(vreq_ng.vif);
 	void* o = &vreq_ng;
 	ioctl_cmd = SIOCGETVIFCNT_NG;
 	if (new_mcast_tables_api || !supports_mcast_tables) {
@@ -2550,6 +2563,8 @@ MfeaMrouter::kernel_call_process(const uint8_t *databuf, size_t datalen)
     UNUSED(databuf);
     UNUSED(datalen);
 #endif
+
+    //XLOG_INFO("kernel-call-process, datalen: %d\n", (int)(datalen));
     
     switch (family()) {
     case AF_INET:

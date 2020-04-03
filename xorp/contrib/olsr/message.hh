@@ -18,7 +18,6 @@
 // XORP Inc, 2953 Bunker Hill Lane, Suite 204, Santa Clara, CA 95054, USA;
 // http://xorp.net
 
-// $XORP: xorp/contrib/olsr/message.hh,v 1.4 2008/10/02 21:56:34 bms Exp $
 
 #ifndef __OLSR_MESSAGE_HH__
 #define __OLSR_MESSAGE_HH__
@@ -194,6 +193,11 @@ public:
      : _linkcode(rhs._linkcode)
     {}
 
+    LinkCode& operator=(const LinkCode& rhs) {
+	_linkcode = rhs._linkcode;
+	return (*this);
+    }
+
     inline LinkCode& operator=(const uint8_t& rhs)
      throw(BadLinkCode) {
 	_linkcode = rhs;
@@ -279,11 +283,11 @@ private:
 class LinkAddrInfo {
 public:
     explicit LinkAddrInfo(const bool has_lq)
-     : _has_etx(has_lq)
+	    : _has_etx(has_lq), _near_etx(0), _far_etx(0)
     {}
 
     explicit LinkAddrInfo(const IPv4& addr)
-     : _has_etx(false), _remote_addr(addr)
+	    : _has_etx(false), _remote_addr(addr), _near_etx(0), _far_etx(0)
     {}
 
     explicit LinkAddrInfo(const IPv4& addr,

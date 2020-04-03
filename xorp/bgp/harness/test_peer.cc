@@ -367,7 +367,7 @@ TestPeer::connect(const string& host, const uint32_t& port,
     size_t len = sizeof(peer);
     try {
 	Socket::init_sockaddr(host, port, peer, len);
-    } catch(UnresolvableHost e) {
+    } catch(UnresolvableHost& e) {
 	error_string = e.why();
 	return false;
     }
@@ -436,13 +436,13 @@ TestPeer::listen(const string& host, const uint32_t& port,
     size_t len = sizeof(local);
     try {
 	Socket::init_sockaddr(host, port, local, len);
-    } catch(UnresolvableHost e) {
+    } catch(UnresolvableHost& e) {
 	error_string = e.why();
 	return false;
     }
 
     XorpFd s = comm_bind_tcp(reinterpret_cast<struct sockaddr *>(&local),
-			     COMM_SOCK_NONBLOCKING);
+			     COMM_SOCK_NONBLOCKING, NULL /* local-dev-name */);
     if (!s.is_valid()) {
 	error_string = c_format("comm_bind_tcp() failed: %s\n",
 				comm_get_last_error_str());
@@ -494,7 +494,7 @@ TestPeer::bind(const string& host, const uint32_t& port,
     size_t len = sizeof(local);
     try {
 	Socket::init_sockaddr(host, port, local, len);
-    } catch(UnresolvableHost e) {
+    } catch(UnresolvableHost& e) {
 	error_string = e.why();
 	return false;
     }
@@ -513,7 +513,7 @@ TestPeer::bind(const string& host, const uint32_t& port,
 	return false;
     }
 
-    if (comm_sock_bind(s, reinterpret_cast<struct sockaddr *>(&local))
+    if (comm_sock_bind(s, reinterpret_cast<struct sockaddr *>(&local), NULL /* local-dev-name */)
 	!= XORP_OK) {
 	comm_sock_close(s);
 	error_string = c_format("comm_sock_bind failed: %s",
@@ -570,8 +570,10 @@ TestPeer::send_complete(AsyncFileWriter::Event ev, const uint8_t *buf,
 	debug_msg("event: error\n");
 	/* Don't free the message here we'll get it in the flush */
 	XLOG_ERROR("Writing buffer failed: %s",  strerror(errno));
+	break;
     case AsyncFileOperator::END_OF_FILE:
 	XLOG_ERROR("End of File: %s",  strerror(errno));
+	break;
     case AsyncFileOperator::WOULDBLOCK:
 	// do nothing
 	;
